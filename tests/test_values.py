@@ -4,6 +4,7 @@ float32 input, for TA-Lib's defaults and for a short window. Per-group evaluatio
 per-group results."""
 
 import numpy as np
+import numpy.typing as npt
 import polars as pl
 import pytest
 import talib
@@ -16,7 +17,7 @@ SHORT_WINDOW = 3
 FRAMES = {"synthetic": frame(), "talib-reference": talib_reference()}
 
 
-def arrays(df: pl.DataFrame, spec: Spec) -> list[np.ndarray]:
+def arrays(df: pl.DataFrame, spec: Spec) -> list[npt.NDArray[np.float64]]:
     return [df[DEFAULT_COLUMN.get(c, c)].to_numpy().astype(np.float64) for c in spec.columns]
 
 

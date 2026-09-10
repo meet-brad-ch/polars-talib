@@ -4,6 +4,7 @@ import inspect
 import math
 
 import numpy as np
+import numpy.typing as npt
 import polars as pl
 import pytest
 import talib
@@ -43,7 +44,7 @@ def test_each_function_lives_in_its_group_module() -> None:
         assert fn is getattr(getattr(plta, MODULES[spec.group]), spec.python_name)
 
 
-def reference_supersmoother(x: np.ndarray, period: float) -> np.ndarray:
+def reference_supersmoother(x: npt.NDArray[np.float64], period: float) -> npt.NDArray[np.float64]:
     """The recursion as VolCore's engine and AmiBroker's IIR() run it."""
     c1 = 1.41421 * math.pi / period
     c2 = math.exp(-c1)
