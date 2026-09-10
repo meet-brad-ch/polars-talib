@@ -22,7 +22,8 @@ outputs) until the function has enough data.
 
 ## How it works
 
-TA-Lib describes its own functions through its *abstract interface*: inputs, parameters
+The design is described in [ARCHITECTURE.md](ARCHITECTURE.md). In short: TA-Lib
+describes its own functions through its *abstract interface*: inputs, parameters
 with defaults, outputs, group, hint. This library has **one** Rust expression that runs
 any TA-Lib function by name through that interface, and builds the Python API from the
 same metadata at import time. No function is written by hand, so a new TA-Lib release is
