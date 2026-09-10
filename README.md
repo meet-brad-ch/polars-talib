@@ -1,5 +1,12 @@
 # polars-talib
 
+[![CI](https://github.com/meet-brad-ch/polars-talib/actions/workflows/ci.yml/badge.svg)](https://github.com/meet-brad-ch/polars-talib/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/meet-brad-ch/polars-talib?label=release)](https://github.com/meet-brad-ch/polars-talib/releases/latest)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![Platform](https://img.shields.io/badge/platform-windows%20x64-lightgrey)
+![TA-Lib](https://img.shields.io/badge/TA--Lib-0.7.1-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Every [TA-Lib](https://ta-lib.org) function as a [Polars](https://pola.rs) expression.
 
 ```python
