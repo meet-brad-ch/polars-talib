@@ -1,0 +1,23 @@
+[package]
+name = "polars_talib"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "TA-Lib for Polars expressions, driven by TA-Lib's own function metadata"
+
+[lib]
+name = "_polars_talib"
+crate-type = ["cdylib"]
+
+[dependencies]
+polars = { version = "0.55", default-features = false, features = ["dtype-struct"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
+pyo3-polars = { version = "0.28", features = ["derive", "dtype-struct"] }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

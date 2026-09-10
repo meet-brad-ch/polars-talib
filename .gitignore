@@ -1,0 +1,9 @@
+/target/
+/dist/
+/.venv*/
+__pycache__/
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pdb
