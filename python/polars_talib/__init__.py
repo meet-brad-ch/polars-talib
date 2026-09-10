@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import polars as pl
 
 from . import _polars_talib
-from ._build import MODULES, specs
+from ._build import MODULES, expression, specs
 from .cycle import *  # noqa: F403
 from .math_operators import *  # noqa: F403
 from .math_transform import *  # noqa: F403
@@ -43,3 +43,11 @@ def get_function_groups() -> dict[str, list[str]]:
 def hma(real: IntoExpr = "close", period: int = 16) -> pl.Expr:
     """Hull Moving Average: WMA(2 * WMA(n / 2) - WMA(n), isqrt(n)). Not a TA-Lib function."""
     return wma(2 * wma(real, period // 2) - wma(real, period), math.isqrt(period))
+
+
+def supersmoother(real: IntoExpr = "close", period: float = 10.0) -> pl.Expr:
+    """Ehlers' 2-pole SuperSmoother, a low-pass IIR filter with about half the lag of an
+    EMA of the same cut-off. Coefficients as AmiBroker's IIR() documents them (1.41421 for
+    sqrt 2), seeded with the first two values; leading NaN rows are skipped. Not a TA-Lib
+    function."""
+    return expression("supersmoother", [real], {"period": period})

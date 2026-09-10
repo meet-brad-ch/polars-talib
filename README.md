@@ -52,8 +52,15 @@ pip install https://github.com/meet-brad-ch/polars-talib/releases/download/v0.1.
 The oracle is ta-lib-python built on the same TA-Lib version. Every function is checked
 for the exact signature TA-Lib declares and for bit-identical values on float64 and float32
 input, on a synthetic frame with leading NaN rows and a null, and on TA-Lib's own 252-bar
-reference data. `hma`, the one function TA-Lib does not have, is checked against the WMA
-composition it is defined by.
+reference data. The two functions TA-Lib does not have are checked against their
+definitions: `hma` against the WMA composition, `supersmoother` against the recursion.
+
+## Beyond TA-Lib
+
+`hma` (Hull Moving Average) is a composition of `wma` calls in Python. `supersmoother`
+(Ehlers' 2-pole low-pass filter, with AmiBroker's IIR() coefficients) is a Rust expression
+of its own in `src/extra.rs`. New indicators follow the same two routes; the TA-Lib layer
+is never touched.
 
 ```
 git clone --recurse-submodules https://github.com/meet-brad-ch/polars-talib

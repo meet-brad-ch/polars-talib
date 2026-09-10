@@ -60,7 +60,7 @@ fn output_type(fields: &[Field], kwargs: Call) -> PolarsResult<Field> {
 }
 
 /// An input series as the `f64` values TA-Lib reads: nulls become NaN.
-fn column(series: &Series) -> PolarsResult<Vec<f64>> {
+pub(crate) fn column(series: &Series) -> PolarsResult<Vec<f64>> {
     Ok(series.cast(&DataType::Float64)?.f64()?.iter().map(|v| v.unwrap_or(f64::NAN)).collect())
 }
 

@@ -1,6 +1,7 @@
 //! `polars_talib._polars_talib`: the plugin binary (see `plugin.rs`) plus the two things the
 //! Python side needs from TA-Lib itself, its version and the description of every function.
 
+mod extra;
 mod ffi;
 mod plugin;
 mod talib;

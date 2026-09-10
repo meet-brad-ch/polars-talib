@@ -118,6 +118,13 @@ def signature(spec: Spec) -> inspect.Signature:
     return inspect.Signature(columns + params, return_annotation=pl.Expr)
 
 
+def expression(name: str, inputs: list[Any], kwargs: dict[str, Any]) -> pl.Expr:
+    """One of the plugin's expressions applied to `inputs`."""
+    return register_plugin_function(
+        args=inputs, plugin_path=PLUGIN, function_name=name, kwargs=kwargs, is_elementwise=False
+    )
+
+
 def function(spec: Spec) -> Callable[..., pl.Expr]:
     sig = signature(spec)
     width = len(spec.columns)
@@ -127,13 +134,8 @@ def function(spec: Spec) -> Callable[..., pl.Expr]:
         bound = sig.bind(*args, **kwargs)
         bound.apply_defaults()
         values = list(bound.arguments.values())
-        return register_plugin_function(
-            args=values[:width],
-            plugin_path=PLUGIN,
-            function_name="call",
-            kwargs={"name": spec.name, "params": dict(zip(names, values[width:], strict=True))},
-            is_elementwise=False,
-        )
+        params = dict(zip(names, values[width:], strict=True))
+        return expression("call", values[:width], {"name": spec.name, "params": params})
 
     call.__name__ = call.__qualname__ = spec.python_name
     call.__module__ = f"{__package__}.{MODULES[spec.group]}"
