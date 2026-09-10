@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   pull_request:
 
+permissions:
+  contents: write  # attach the wheel to the release of a v* tag
+
 jobs:
   windows:
     runs-on: windows-latest
