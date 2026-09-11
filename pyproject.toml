@@ -1,6 +1,6 @@
 [project]
 name = "polars-talib"
-version = "0.1.0"
+version = "0.0.0"  # placeholder: CI sets the version from the release tag, see ci.yml
 description = "TA-Lib for Polars expressions, driven by TA-Lib's own function metadata"
 readme = "README.md"
 license = "MIT"

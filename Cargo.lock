@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "polars_talib"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "cc",
  "polars",

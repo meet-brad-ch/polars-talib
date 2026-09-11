@@ -52,7 +52,7 @@ Windows x64, Python 3.10 or newer, from the wheel attached to a
 [release](https://github.com/meet-brad-ch/polars-talib/releases):
 
 ```
-pip install https://github.com/meet-brad-ch/polars-talib/releases/download/v0.1.0/polars_talib-0.1.0-cp310-abi3-win_amd64.whl
+pip install https://github.com/meet-brad-ch/polars-talib/releases/download/v0.2.0/polars_talib-0.2.0-cp310-abi3-win_amd64.whl
 ```
 
 ## Tests

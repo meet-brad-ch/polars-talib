@@ -1,6 +1,6 @@
 [package]
 name = "polars_talib"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 license = "MIT"
 description = "TA-Lib for Polars expressions, driven by TA-Lib's own function metadata"
