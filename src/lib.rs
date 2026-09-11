@@ -25,7 +25,7 @@ fn version() -> String {
 /// `params` (name, integer, default, hint) and `outputs` (name, integer).
 #[pyfunction]
 fn functions(py: Python<'_>) -> PyResult<Vec<Bound<'_, PyDict>>> {
-    Function::all()
+    Function::table()
         .map_err(runtime_error)?
         .iter()
         .map(|f| {

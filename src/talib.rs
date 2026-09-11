@@ -2,9 +2,11 @@
 //! TA function (inputs, parameters, outputs), and `call` runs it on plain `f64` columns.
 //! Nothing here knows any function by name.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::os::raw::{c_char, c_uint};
+use std::sync::OnceLock;
 
 use crate::ffi::*;
 
@@ -99,6 +101,17 @@ pub enum Column {
     Integer(Vec<i32>),
 }
 
+impl Column {
+    /// `len` rows of the value a row without a result holds: NaN, or 0 for integers.
+    fn filled(integer: bool, len: usize) -> Column {
+        if integer {
+            Column::Integer(vec![0; len])
+        } else {
+            Column::Real(vec![f64::NAN; len])
+        }
+    }
+}
+
 /// The functions whose integer output is a position in the input.
 const POSITIONAL: [&str; 3] = ["MAXINDEX", "MININDEX", "MINMAXINDEX"];
 
@@ -115,7 +128,44 @@ pub struct Function {
     positional: bool,
 }
 
+// SAFETY: `handle` points into TA-Lib's static function table, which is never written
+// after `TA_Initialize`; every other field is owned data.
+unsafe impl Send for Function {}
+unsafe impl Sync for Function {}
+
+/// Every function, described once. The first use asks TA-Lib; every call after that is a
+/// map lookup with no allocation.
+struct Table {
+    functions: Vec<Function>,
+    index: HashMap<String, usize>,
+}
+
+static TABLE: OnceLock<Table> = OnceLock::new();
+
+fn table() -> Result<&'static Table, Error> {
+    if let Some(table) = TABLE.get() {
+        return Ok(table);
+    }
+    let functions = Function::all()?;
+    let index = functions.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
+    Ok(TABLE.get_or_init(|| Table { functions, index }))
+}
+
 impl Function {
+    /// The description of one function, by TA-Lib's name, from the table.
+    pub fn get(name: &str) -> Result<&'static Function, Error> {
+        let table = table()?;
+        match table.index.get(name) {
+            Some(&i) => Ok(&table.functions[i]),
+            None => Err(Error(format!("TA_GetFuncHandle({name}): TA_FUNC_NOT_FOUND (unknown function)"))),
+        }
+    }
+
+    /// Every function TA-Lib knows, from the table.
+    pub fn table() -> Result<&'static [Function], Error> {
+        Ok(&table()?.functions)
+    }
+
     pub fn lookup(name: &str) -> Result<Function, Error> {
         let c_name = CString::new(name).map_err(|e| Error(e.to_string()))?;
         let mut handle = std::ptr::null();
@@ -137,8 +187,8 @@ impl Function {
     }
 
     /// Every function TA-Lib knows, group by group in TA-Lib's own order (the order
-    /// ta-lib-python lists them in too).
-    pub fn all() -> Result<Vec<Function>, Error> {
+    /// ta-lib-python lists them in too). Asks TA-Lib each time; `table` caches the answer.
+    fn all() -> Result<Vec<Function>, Error> {
         let mut functions = Vec::new();
         for group in strings(|t| unsafe { TA_GroupTableAlloc(t) }, TA_GroupTableFree)? {
             let c_group = CString::new(group).map_err(|e| Error(e.to_string()))?;
@@ -230,29 +280,40 @@ impl Function {
         let mut lookback: TA_Integer = 0;
         check(unsafe { TA_GetLookback(holder.0, &mut lookback) }, "TA_GetLookback")?;
         let full = offset + n;
-        let mut outputs: Vec<Column> = self
-            .outputs
-            .iter()
-            .map(|o| if o.integer { Column::Integer(vec![0; full]) } else { Column::Real(vec![f64::NAN; full]) })
-            .collect();
         // A negative lookback means the parameters are invalid; the call below then returns
         // TA-Lib's own error for them.
         if lookback >= n as TA_Integer {
-            return Ok(outputs);
+            return Ok(self.outputs.iter().map(|o| Column::filled(o.integer, full)).collect());
         }
         let lookback = lookback.max(0) as usize;
-        // TA-Lib writes straight into the final column, after the rows it does not produce.
+        // Only the rows TA-Lib does not produce are filled. TA-Lib writes the rest straight
+        // into the final column's spare capacity, and the length is set once it has.
         let first = offset + lookback;
+        let mut outputs: Vec<Column> = self.outputs.iter().map(|o| Column::filled(o.integer, first)).collect();
         for (i, out) in outputs.iter_mut().enumerate() {
             let code = match out {
-                Column::Real(v) => unsafe { TA_SetOutputParamRealPtr(holder.0, i as c_uint, v[first..].as_mut_ptr()) },
-                Column::Integer(v) => unsafe { TA_SetOutputParamIntegerPtr(holder.0, i as c_uint, v[first..].as_mut_ptr()) },
+                Column::Real(v) => {
+                    v.reserve_exact(full - first);
+                    unsafe { TA_SetOutputParamRealPtr(holder.0, i as c_uint, v.spare_capacity_mut().as_mut_ptr().cast()) }
+                }
+                Column::Integer(v) => {
+                    v.reserve_exact(full - first);
+                    unsafe { TA_SetOutputParamIntegerPtr(holder.0, i as c_uint, v.spare_capacity_mut().as_mut_ptr().cast()) }
+                }
             };
             check(code, "TA_SetOutputParam")?;
         }
         let (mut beg, mut count) = (0, 0);
         check(unsafe { TA_CallFunc(holder.0, 0, n as TA_Integer - 1, &mut beg, &mut count) }, &self.name)?;
         assert!(beg as usize == lookback && lookback + count as usize == n, "{}: unexpected output range", self.name);
+        for out in outputs.iter_mut() {
+            // SAFETY: TA-Lib wrote `count == n - lookback == full - first` values of the
+            // output's type into the reserved capacity, as the assert above checks.
+            match out {
+                Column::Real(v) => unsafe { v.set_len(full) },
+                Column::Integer(v) => unsafe { v.set_len(full) },
+            }
+        }
         if self.positional {
             for out in outputs.iter_mut() {
                 if let Column::Integer(v) = out {

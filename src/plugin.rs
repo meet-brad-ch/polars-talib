@@ -25,8 +25,8 @@ struct Call {
 }
 
 impl Call {
-    fn function(&self) -> PolarsResult<Function> {
-        Function::lookup(&self.name).map_err(|e| polars_err!(ComputeError: "{e}"))
+    fn function(&self) -> PolarsResult<&'static Function> {
+        Function::get(&self.name).map_err(|e| polars_err!(ComputeError: "{e}"))
     }
 
     /// Parameter values in TA-Lib's declaration order.
@@ -98,7 +98,7 @@ fn call(inputs: &[Series], kwargs: Call) -> PolarsResult<Series> {
     if inputs.len() != function.width() {
         polars_bail!(ComputeError: "{}: expects {} input series, got {}", function.name, function.width(), inputs.len());
     }
-    let values = kwargs.values(&function)?;
+    let values = kwargs.values(function)?;
     let columns = inputs.iter().map(column).collect::<PolarsResult<Vec<_>>>()?;
     let n = columns[0].len();
     // TA-Lib does not understand NaN: skip the leading rows where any input is NaN, as

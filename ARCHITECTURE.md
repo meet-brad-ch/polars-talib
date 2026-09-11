@@ -61,7 +61,9 @@ interface, this is the one file to update.
 ### 2.3 The safe layer (`src/talib.rs`)
 
 `Function::lookup(name)` asks TA-Lib for the description of one function and stores it in
-plain Rust values:
+plain Rust values. This happens once per function: the first use builds a table of every
+function, and `Function::get(name)` serves every later call from it without allocating.
+The description holds:
 
 - `inputs`: a list of `Input::Real(name)` or `Input::Price(parts)`,
 - `params`: name, integer flag, default value, hint,
@@ -79,11 +81,11 @@ Names are spelled the way ta-lib-python spells them. `optInFastPeriod` becomes
    component.
 3. Set each parameter. An integer parameter refuses a fractional value.
 4. Ask TA-Lib for the lookback. A negative lookback means the parameters are invalid.
-5. Allocate each output `offset` rows longer than the input, filled with NaN (real) or 0
-   (integer). This is the column the caller returns; nothing copies it again.
-6. If the lookback is not shorter than the data, return the filled outputs. This is not an
-   error.
-7. Otherwise run the function into the outputs, starting `offset` plus the lookback rows in.
+5. If the lookback is not shorter than the data, return outputs of NaN (real) or 0
+   (integer), `offset` rows longer than the input. This is not an error.
+6. Otherwise allocate each output at that full length, fill only the first `offset` plus
+   lookback rows, and let TA-Lib write the rest into the reserved capacity. This is the
+   column the caller returns; nothing copies or fills it again.
 8. For MAXINDEX, MININDEX and MINMAXINDEX, add `offset` to each position. These are the
    only functions whose output is a position in the input.
 
@@ -101,7 +103,7 @@ several outputs. The struct fields carry TA-Lib's output names.
 
 At run time, `call` does the following:
 
-1. Look the function up and check the number of input series.
+1. Take the function from the table and check the number of input series.
 2. Take each input as `f64` values. A `Float64` column in one chunk without nulls is
    borrowed as it is, without a copy. Anything else is cast to `Float64` and copied chunk
    by chunk; nulls become NaN.
@@ -207,7 +209,9 @@ from its regression tool, parsed from the submodule.
 ### 6.1 Would rewriting the functions in Rust be faster?
 
 No. Measured once with a throwaway Rust EMA, bit-identical to `TA_EMA`, on one machine
-(24 threads, polars 1.44, TA-Lib 0.7.1, period 30, minimum of 15 runs):
+(24 threads, polars 1.44, TA-Lib 0.7.1, period 30, minimum of 15 runs). Both paths went
+through the same `call` machinery, before the output fill and the function table were
+trimmed; both have become about 10 % faster since, in step.
 
 | rows | `ema` through TA-Lib | the same loop in Rust | `ewm_mean` (Polars, seeds differently) |
 |---|---:|---:|---:|
@@ -228,5 +232,21 @@ boundary was never the cost.
 
 Under `.over()` with many small groups, both paths sit about 3.5 ms above the cost of a
 plain arithmetic expression over the same groups. That is Polars' per-call plugin
-dispatch (the kwargs are deserialized on every call) plus TA-Lib's parameter holder and
-function lookup, about 1.7 µs per group in total.
+dispatch (the kwargs are deserialized on every call) plus TA-Lib's parameter holder,
+about 1.7 µs per group in total.
+
+### 6.2 Against ta-lib-python
+
+ta-lib-python runs the same C code on numpy arrays, and `to_numpy()` is zero-copy for a
+dense float column, so one indicator on one series costs the same on either route. The
+plugin wins where Polars does the work around the call: independent expressions run in
+parallel, and `.over()` runs the function per group without a Python call. Median of 10
+runs, same machine:
+
+| scenario | plugin | ta-lib-python on `to_numpy` | ta-lib-python in `map_batches` |
+|---|---:|---:|---:|
+| 1 indicator, 1M rows | 2.7 ms | 2.6 ms | 2.6 ms |
+| 8 indicators in one select, 1M rows | 13.5 ms | 32.6 ms | 33.4 ms |
+| 8 indicators, 10M rows | 128 ms | 334 ms | 339 ms |
+| 1 indicator over 2 000 symbols | 10.5 ms | 8.9 ms, hand-written loop | 32.4 ms |
+| 1 indicator over 20 000 symbols | 69 ms | 51 ms, hand-written loop | 291 ms |
