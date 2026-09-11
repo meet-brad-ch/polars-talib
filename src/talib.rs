@@ -71,7 +71,10 @@ pub enum Input {
 impl Input {
     /// How many series this input consumes from the plugin's argument list.
     pub fn width(&self) -> usize {
-        self.names().len()
+        match self {
+            Input::Real(_) => 1,
+            Input::Price(parts) => parts.len(),
+        }
     }
 
     /// The name of each series this input consumes, in order.
@@ -254,25 +257,37 @@ impl Function {
     }
 
     /// The common length of the input series given by `lengths`, or why there is none:
-    /// the wrong number of series, or series of different lengths.
-    pub fn rows(&self, lengths: impl ExactSizeIterator<Item = usize>) -> Result<usize, Error> {
-        let names: Vec<&str> = self.inputs.iter().flat_map(Input::names).collect();
-        if lengths.len() != names.len() {
+    /// the wrong number of series, or series of different lengths. Allocates only for
+    /// the error message.
+    pub fn rows(&self, lengths: impl ExactSizeIterator<Item = usize> + Clone) -> Result<usize, Error> {
+        let width: usize = self.inputs.iter().map(Input::width).sum();
+        if lengths.len() != width {
+            let names: Vec<&str> = self.inputs.iter().flat_map(Input::names).collect();
             return Err(Error(format!(
-                "{}: expects {} input series ({}), got {}",
+                "{}: expects {width} input series ({}), got {}",
                 self.name,
-                names.len(),
                 names.join(", "),
                 lengths.len()
             )));
         }
-        let lengths: Vec<usize> = lengths.collect();
-        let n = lengths.first().copied().unwrap_or(0);
-        if lengths.iter().any(|&len| len != n) {
-            let each: Vec<String> = names.iter().zip(&lengths).map(|(name, len)| format!("{name}={len}")).collect();
+        let mut rest = lengths.clone();
+        let n = rest.next().unwrap_or(0);
+        if rest.any(|len| len != n) {
+            let names = self.inputs.iter().flat_map(Input::names);
+            let each: Vec<String> = names.zip(lengths).map(|(name, len)| format!("{name}={len}")).collect();
             return Err(Error(format!("{}: input series differ in length: {}", self.name, each.join(", "))));
         }
         Ok(n)
+    }
+
+    /// The call as TA-Lib sees it, for error messages: "SMA: timeperiod=0".
+    fn describe(&self, values: &[Number]) -> String {
+        let given: Vec<String> = self.params.iter().zip(values).map(|(p, v)| format!("{}={v}", p.name)).collect();
+        if given.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, given.join(", "))
+        }
     }
 
     /// Run the function. `columns` are the input series in declaration order, all of equal
@@ -325,15 +340,12 @@ impl Function {
             };
             check(code, &format!("{}: {}", self.name, param.name))?;
         }
-        // The call as TA-Lib sees it, for error messages: "SMA: timeperiod=0".
-        let given: Vec<String> = self.params.iter().zip(values).map(|(p, v)| format!("{}={v}", p.name)).collect();
-        let what = if given.is_empty() { self.name.clone() } else { format!("{}: {}", self.name, given.join(", ")) };
         let mut lookback: TA_Integer = 0;
         check(unsafe { TA_GetLookback(holder.0, &mut lookback) }, "TA_GetLookback")?;
         // A negative lookback is how TA-Lib's lookback functions report a parameter out of
         // range; TA_CallFunc would report the same, or an index error first on no rows.
         if lookback < 0 {
-            return Err(Error(format!("{what}: TA_BAD_PARAM (a parameter is out of range)")));
+            return Err(Error(format!("{}: TA_BAD_PARAM (a parameter is out of range)", self.describe(values))));
         }
         if lookback >= n_rows {
             return Ok(self.outputs.iter().map(|o| Column::new(o.integer, full, full)).collect());
@@ -356,7 +368,10 @@ impl Function {
             check(code, "TA_SetOutputParam")?;
         }
         let (mut beg, mut count) = (0, 0);
-        check(unsafe { TA_CallFunc(holder.0, 0, n_rows - 1, &mut beg, &mut count) }, &what)?;
+        let code = unsafe { TA_CallFunc(holder.0, 0, n_rows - 1, &mut beg, &mut count) };
+        if code != TA_SUCCESS {
+            check(code, &self.describe(values))?;
+        }
         if i64::from(beg) != lookback as i64 || i64::from(count) != (n - lookback) as i64 {
             return Err(Error(format!(
                 "{}: TA-Lib produced rows {beg}..{}, expected {lookback}..{n}",
