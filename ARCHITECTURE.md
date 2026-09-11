@@ -253,12 +253,12 @@ ta-lib-python runs the same C code on numpy arrays, and `to_numpy()` is zero-cop
 dense float column, so one indicator on one series costs the same on either route. The
 plugin wins where Polars does the work around the call: independent expressions run in
 parallel, and `.over()` runs the function per group without a Python call. Median of 10
-runs, same machine:
+runs, same machine, the symbol rows each measured in a fresh process:
 
 | scenario | plugin | ta-lib-python on `to_numpy` | ta-lib-python in `map_batches` |
 |---|---:|---:|---:|
-| 1 indicator, 1M rows | 2.7 ms | 2.6 ms | 2.6 ms |
-| 8 indicators in one select, 1M rows | 13.5 ms | 32.6 ms | 33.4 ms |
-| 8 indicators, 10M rows | 128 ms | 334 ms | 339 ms |
-| 1 indicator over 2 000 symbols | 10.5 ms | 8.9 ms, hand-written loop | 32.4 ms |
-| 1 indicator over 20 000 symbols | 69 ms | 51 ms, hand-written loop | 291 ms |
+| 1 indicator, 1M rows | 2.6 ms | 2.6 ms | 2.7 ms |
+| 8 indicators in one select, 1M rows | 13.3 ms | 33.2 ms | 34.3 ms |
+| 8 indicators, 10M rows | 129 ms | 344 ms | 341 ms |
+| 1 indicator over 2 000 symbols | 11.3 ms | 8.9 ms, hand-written loop | 35 ms |
+| 1 indicator over 20 000 symbols | 72 ms | 54 ms, hand-written loop | 289 ms |
