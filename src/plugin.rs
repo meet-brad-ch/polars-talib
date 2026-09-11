@@ -10,18 +10,11 @@ use serde::Deserialize;
 
 use crate::talib::{Column, Function, Number, Output};
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Value {
-    Int(i64),
-    Float(f64),
-}
-
 /// Kwargs of `call`: which TA-Lib function, and its parameters by name.
 #[derive(Deserialize)]
 struct Call {
     name: String,
-    params: BTreeMap<String, Value>,
+    params: BTreeMap<String, Number>,
 }
 
 impl Call {
@@ -29,17 +22,29 @@ impl Call {
         Function::get(&self.name).map_err(|e| polars_err!(ComputeError: "{e}"))
     }
 
-    /// Parameter values in TA-Lib's declaration order.
+    /// Parameter values in TA-Lib's declaration order. Every declared parameter must be
+    /// given, and nothing else.
     fn values(&self, function: &Function) -> PolarsResult<Vec<Number>> {
-        function
+        let values = function
             .params
             .iter()
-            .map(|p| match self.params.get(&p.name) {
-                Some(Value::Int(v)) => Ok(Number::Int(*v)),
-                Some(Value::Float(v)) => Ok(Number::Float(*v)),
-                None => polars_bail!(ComputeError: "{}: missing parameter {}", self.name, p.name),
+            .map(|p| {
+                self.params
+                    .get(&p.name)
+                    .copied()
+                    .ok_or_else(|| polars_err!(ComputeError: "{}: missing parameter {}", self.name, p.name))
             })
-            .collect()
+            .collect::<PolarsResult<Vec<_>>>()?;
+        if self.params.len() != values.len() {
+            let unknown: Vec<&str> = self
+                .params
+                .keys()
+                .filter(|k| !function.params.iter().any(|p| &p.name == *k))
+                .map(String::as_str)
+                .collect();
+            polars_bail!(ComputeError: "{}: unknown parameter {}", self.name, unknown.join(", "));
+        }
+        Ok(values)
     }
 }
 
@@ -95,12 +100,9 @@ fn series(name: PlSmallStr, output: Column) -> Series {
 #[polars_expr(output_type_func_with_kwargs = output_type)]
 fn call(inputs: &[Series], kwargs: Call) -> PolarsResult<Series> {
     let function = kwargs.function()?;
-    if inputs.len() != function.width() {
-        polars_bail!(ComputeError: "{}: expects {} input series, got {}", function.name, function.width(), inputs.len());
-    }
     let values = kwargs.values(function)?;
     let columns = inputs.iter().map(column).collect::<PolarsResult<Vec<_>>>()?;
-    let n = columns[0].len();
+    let n = function.rows(columns.iter().map(|c| c.len())).map_err(|e| polars_err!(ComputeError: "{e}"))?;
     // TA-Lib does not understand NaN: skip the leading rows where any input is NaN, as
     // ta-lib-python does, and leave those rows at NaN / 0 in the output.
     let begin = (0..n).find(|&i| columns.iter().all(|c| !c[i].is_nan())).unwrap_or(n);

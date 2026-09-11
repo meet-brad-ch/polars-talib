@@ -5,6 +5,7 @@ import polars as pl
 import pytest
 
 import polars_talib as plta
+from polars_talib._build import expression
 
 SHORT = pl.DataFrame({"close": [1.0, 2.0, 3.0]})
 
@@ -87,3 +88,43 @@ def test_over_interleaved_groups_equals_contiguous(ohlcv: pl.DataFrame) -> None:
     exprs = [plta.ema().over("symbol").alias("e"), plta.macd().over("symbol").alias("m")]
     got = interleaved.with_columns(exprs).sort("row")
     assert got.select("e", "m").equals(two.with_columns(exprs).select("e", "m"))
+
+
+def test_input_series_of_different_lengths_is_an_error(ohlcv: pl.DataFrame) -> None:
+    with pytest.raises(pl.exceptions.ComputeError, match="differ in length: high=1, low=300"):
+        ohlcv.select(plta.atr(high=pl.lit(1.0)))
+
+
+def test_integer_parameter_beyond_32_bits_is_an_error() -> None:
+    with pytest.raises(pl.exceptions.ComputeError, match="32-bit integer, got 4294967298"):
+        SHORT.select(plta.sma(timeperiod=2**32 + 2))
+
+
+@pytest.mark.parametrize("df", [SHORT, SHORT.clear()], ids=["rows", "empty"])
+def test_invalid_parameter_error_names_the_value(df: pl.DataFrame) -> None:
+    with pytest.raises(pl.exceptions.ComputeError, match="SMA: timeperiod=0: TA_BAD_PARAM"):
+        df.select(plta.sma(timeperiod=0))
+
+
+def test_empty_frame_gives_empty_output(ohlcv: pl.DataFrame) -> None:
+    exprs = [plta.sma().alias("s"), plta.macd().alias("m"), plta.maxindex().alias("i")]
+    exprs.append(plta.supersmoother().alias("ss"))
+    out = ohlcv.clear().select(exprs)
+    assert out.height == 0 and out.schema == ohlcv.select(exprs).schema
+
+
+def test_unknown_parameter_through_the_plugin_is_an_error() -> None:
+    bogus = expression(
+        "call", [pl.col("close")], {"name": "SMA", "params": {"timeperiod": 2, "bogus": 1}}
+    )
+    with pytest.raises(pl.exceptions.ComputeError, match="SMA: unknown parameter bogus"):
+        SHORT.select(bogus)
+
+
+def test_many_expressions_in_one_select_equal_one_at_a_time(ohlcv: pl.DataFrame) -> None:
+    windows = range(2, 40)
+    together = ohlcv.select([plta.sma(timeperiod=w).alias(f"s{w}") for w in windows])
+    for w in windows:
+        assert together[f"s{w}"].equals(
+            ohlcv.select(plta.sma(timeperiod=w).alias(f"s{w}"))[f"s{w}"]
+        )

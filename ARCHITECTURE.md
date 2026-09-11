@@ -72,25 +72,32 @@ The description holds:
 Names are spelled the way ta-lib-python spells them. `optInFastPeriod` becomes
 `fastperiod`. `outRealUpperBand` becomes `upperband`. The function `plain` does this.
 
-`Function::all()` lists every function, group by group, in TA-Lib's order.
+`Function::table()` lists every function, group by group, in TA-Lib's order.
 
 `Function::call(columns, values, offset)` runs the function:
 
-1. Allocate a TA-Lib parameter holder.
-2. Bind each input series in declaration order. A price input takes one series per
+1. Check the inputs: the declared number of series, all of one length, and no more rows
+   than a C `int` counts. `Function::rows` does this; the expression calls it too, before
+   it looks at any value.
+2. Allocate a TA-Lib parameter holder.
+3. Bind each input series in declaration order. A price input takes one series per
    component.
-3. Set each parameter. An integer parameter refuses a fractional value.
-4. Ask TA-Lib for the lookback. A negative lookback means the parameters are invalid.
-5. If the lookback is not shorter than the data, return outputs of NaN (real) or 0
+4. Set each parameter. An integer parameter refuses a fractional value and a value that
+   does not fit 32 bits.
+5. Ask TA-Lib for the lookback. A negative lookback means a parameter is out of range:
+   the error names the function and every parameter with its value.
+6. If the lookback is not shorter than the data, return outputs of NaN (real) or 0
    (integer), `offset` rows longer than the input. This is not an error.
-6. Otherwise allocate each output at that full length, fill only the first `offset` plus
-   lookback rows, and let TA-Lib write the rest into the reserved capacity. This is the
+7. Otherwise allocate each output once, fill only the first `offset` plus lookback rows,
+   and let TA-Lib write into the capacity after them. The capacity holds as many rows as
+   the input, which is the most TA-Lib's contract lets it write. Once TA-Lib reports the
+   range it produced, and that range is the expected one, the length is set. This is the
    column the caller returns; nothing copies or fills it again.
 8. For MAXINDEX, MININDEX and MINMAXINDEX, add `offset` to each position. These are the
    only functions whose output is a position in the input.
 
 Every TA-Lib return code other than success becomes an `Error` that carries TA-Lib's own
-enum name, for example `TA_BAD_PARAM`.
+enum name, for example `TA_BAD_PARAM`, after the function and its parameter values.
 
 ### 2.4 The expression (`src/plugin.rs`)
 
@@ -103,12 +110,14 @@ several outputs. The struct fields carry TA-Lib's output names.
 
 At run time, `call` does the following:
 
-1. Take the function from the table and check the number of input series.
+1. Take the function from the table and its parameter values from the kwargs. A missing
+   or unknown parameter is an error.
 2. Take each input as `f64` values. A `Float64` column in one chunk without nulls is
    borrowed as it is, without a copy. Anything else is cast to `Float64` and copied chunk
    by chunk; nulls become NaN.
-3. Find the first row where no input is NaN. Rows before it are skipped. This is what
-   ta-lib-python does. TA-Lib itself does not understand NaN.
+3. Check the inputs with `Function::rows`, then find the first row where no input is
+   NaN. Rows before it are skipped. This is what ta-lib-python does. TA-Lib itself does
+   not understand NaN.
 4. Run `Function::call` on the remaining rows, with the number of skipped rows as `offset`.
    The outputs come back full length, the skipped rows already NaN or 0.
 5. Return one series, or a struct of series.
@@ -166,8 +175,11 @@ committed. A test fails while a committed stub differs from a fresh render.
 - Inputs are `Float64` inside the plugin. Integer and `Float32` columns are cast.
 - A window longer than the data gives NaN or 0 rows, never an error. This keeps `.over()`
   groups that are shorter than the window from failing the whole query.
-- Invalid parameters raise `ComputeError` with TA-Lib's enum name in the message.
-- A fractional value for an integer parameter raises. It is not truncated.
+- Invalid parameters raise `ComputeError` with TA-Lib's enum name and every parameter's
+  value in the message.
+- A fractional value for an integer parameter raises, and so does a value that does not
+  fit 32 bits. Nothing is truncated.
+- Input series of different lengths raise, naming each series and its length.
 - Output names, parameter names and defaults are TA-Lib's. Nothing is renamed by hand.
 - There are no fallbacks. A missing function, a wrong number of inputs or an unknown
   parameter is an error.
