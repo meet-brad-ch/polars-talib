@@ -93,7 +93,7 @@ pub enum Number {
     Float(f64),
 }
 
-/// Result columns, one per declared output, each as long as the input.
+/// Result columns, one per declared output, each `offset` rows longer than the input.
 pub enum Column {
     Real(Vec<f64>),
     Integer(Vec<i32>),
@@ -187,11 +187,12 @@ impl Function {
     }
 
     /// Run the function. `columns` are the input series in declaration order, all of equal
-    /// length; `values` are the parameters in declaration order. Rows before the function's
-    /// lookback hold NaN (real) or 0 (integer). A window longer than the data is not an
-    /// error: every row is then NaN / 0. `offset` is the number of rows the caller cut off
-    /// the front of its data; positions reported by the MAXINDEX family count from the
-    /// caller's first row, as ta-lib-python's do.
+    /// length; `values` are the parameters in declaration order. `offset` is the number of
+    /// rows the caller cut off the front of its data: each output column is `offset` rows
+    /// longer than the input, and those rows, like the rows before the function's lookback,
+    /// hold NaN (real) or 0 (integer). Positions reported by the MAXINDEX family count from
+    /// the caller's first row, as ta-lib-python's do. A window longer than the data is not
+    /// an error: every row is then NaN / 0.
     pub fn call(&self, columns: &[&[f64]], values: &[Number], offset: usize) -> Result<Vec<Column>, Error> {
         let n = columns.first().map_or(0, |c| c.len());
         assert!(columns.len() == self.width() && columns.iter().all(|c| c.len() == n));
@@ -228,10 +229,11 @@ impl Function {
         }
         let mut lookback: TA_Integer = 0;
         check(unsafe { TA_GetLookback(holder.0, &mut lookback) }, "TA_GetLookback")?;
+        let full = offset + n;
         let mut outputs: Vec<Column> = self
             .outputs
             .iter()
-            .map(|o| if o.integer { Column::Integer(vec![0; n]) } else { Column::Real(vec![f64::NAN; n]) })
+            .map(|o| if o.integer { Column::Integer(vec![0; full]) } else { Column::Real(vec![f64::NAN; full]) })
             .collect();
         // A negative lookback means the parameters are invalid; the call below then returns
         // TA-Lib's own error for them.
@@ -239,10 +241,12 @@ impl Function {
             return Ok(outputs);
         }
         let lookback = lookback.max(0) as usize;
+        // TA-Lib writes straight into the final column, after the rows it does not produce.
+        let first = offset + lookback;
         for (i, out) in outputs.iter_mut().enumerate() {
             let code = match out {
-                Column::Real(v) => unsafe { TA_SetOutputParamRealPtr(holder.0, i as c_uint, v[lookback..].as_mut_ptr()) },
-                Column::Integer(v) => unsafe { TA_SetOutputParamIntegerPtr(holder.0, i as c_uint, v[lookback..].as_mut_ptr()) },
+                Column::Real(v) => unsafe { TA_SetOutputParamRealPtr(holder.0, i as c_uint, v[first..].as_mut_ptr()) },
+                Column::Integer(v) => unsafe { TA_SetOutputParamIntegerPtr(holder.0, i as c_uint, v[first..].as_mut_ptr()) },
             };
             check(code, "TA_SetOutputParam")?;
         }
@@ -252,7 +256,7 @@ impl Function {
         if self.positional {
             for out in outputs.iter_mut() {
                 if let Column::Integer(v) = out {
-                    v[lookback..].iter_mut().for_each(|i| *i += offset as i32);
+                    v[first..].iter_mut().for_each(|i| *i += offset as i32);
                 }
             }
         }

@@ -35,7 +35,7 @@ fn supersmoother(inputs: &[Series], kwargs: Period) -> PolarsResult<Series> {
 
     let x = column(&inputs[0])?;
     let begin = x.iter().position(|v| !v.is_nan()).unwrap_or(x.len());
-    let mut y = x.clone();
+    let mut y = x.to_vec();
     for i in begin + 2..x.len() {
         y[i] = b0 * x[i] + b0 * x[i - 1] + a1 * y[i - 1] + a2 * y[i - 2];
     }

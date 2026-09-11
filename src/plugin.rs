@@ -1,6 +1,7 @@
 //! The one Polars expression: `call` runs any TA-Lib function, named in its kwargs, on the
 //! input series it is given.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use polars::prelude::*;
@@ -59,23 +60,35 @@ fn output_type(fields: &[Field], kwargs: Call) -> PolarsResult<Field> {
     })
 }
 
-/// An input series as the `f64` values TA-Lib reads: nulls become NaN.
-pub(crate) fn column(series: &Series) -> PolarsResult<Vec<f64>> {
-    Ok(series.cast(&DataType::Float64)?.f64()?.iter().map(|v| v.unwrap_or(f64::NAN)).collect())
+/// An input series as the `f64` values TA-Lib reads: nulls become NaN. A `Float64` column
+/// in one chunk without nulls is borrowed as it is; anything else is cast and copied chunk
+/// by chunk, the null rows set to NaN afterwards.
+pub(crate) fn column(series: &Series) -> PolarsResult<Cow<'_, [f64]>> {
+    if let Ok(ca) = series.f64() {
+        if let Ok(slice) = ca.cont_slice() {
+            return Ok(Cow::Borrowed(slice));
+        }
+    }
+    let cast = series.cast(&DataType::Float64)?;
+    let mut values = Vec::with_capacity(cast.len());
+    for array in cast.f64()?.downcast_iter() {
+        let start = values.len();
+        values.extend_from_slice(array.values().as_slice());
+        if let Some(validity) = array.validity() {
+            for (i, valid) in validity.iter().enumerate() {
+                if !valid {
+                    values[start + i] = f64::NAN;
+                }
+            }
+        }
+    }
+    Ok(Cow::Owned(values))
 }
 
-fn series(name: PlSmallStr, leading: usize, output: Column) -> Series {
+fn series(name: PlSmallStr, output: Column) -> Series {
     match output {
-        Column::Real(v) => {
-            let mut full = vec![f64::NAN; leading];
-            full.extend(v);
-            Float64Chunked::from_vec(name, full).into_series()
-        }
-        Column::Integer(v) => {
-            let mut full = vec![0i32; leading];
-            full.extend(v);
-            Int32Chunked::from_vec(name, full).into_series()
-        }
+        Column::Real(v) => Float64Chunked::from_vec(name, v).into_series(),
+        Column::Integer(v) => Int32Chunked::from_vec(name, v).into_series(),
     }
 }
 
@@ -95,13 +108,13 @@ fn call(inputs: &[Series], kwargs: Call) -> PolarsResult<Series> {
     let outputs = function.call(&slices, &values, begin).map_err(|e| polars_err!(ComputeError: "{e}"))?;
     let name = inputs[0].name().clone();
     if function.outputs.len() == 1 {
-        return Ok(series(name, begin, outputs.into_iter().next().unwrap()));
+        return Ok(series(name, outputs.into_iter().next().unwrap()));
     }
     let fields: Vec<Series> = function
         .outputs
         .iter()
         .zip(outputs)
-        .map(|(o, out)| series(o.name.as_str().into(), begin, out))
+        .map(|(o, out)| series(o.name.as_str().into(), out))
         .collect();
     Ok(StructChunked::from_series(name, n, fields.iter())?.into_series())
 }

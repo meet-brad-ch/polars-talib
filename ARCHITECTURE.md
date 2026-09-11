@@ -79,10 +79,11 @@ Names are spelled the way ta-lib-python spells them. `optInFastPeriod` becomes
    component.
 3. Set each parameter. An integer parameter refuses a fractional value.
 4. Ask TA-Lib for the lookback. A negative lookback means the parameters are invalid.
-5. Fill each output with NaN (real) or 0 (integer).
+5. Allocate each output `offset` rows longer than the input, filled with NaN (real) or 0
+   (integer). This is the column the caller returns; nothing copies it again.
 6. If the lookback is not shorter than the data, return the filled outputs. This is not an
    error.
-7. Otherwise run the function into the outputs, starting at the lookback row.
+7. Otherwise run the function into the outputs, starting `offset` plus the lookback rows in.
 8. For MAXINDEX, MININDEX and MINMAXINDEX, add `offset` to each position. These are the
    only functions whose output is a position in the input.
 
@@ -101,12 +102,14 @@ several outputs. The struct fields carry TA-Lib's output names.
 At run time, `call` does the following:
 
 1. Look the function up and check the number of input series.
-2. Cast each input to `Float64`. Nulls become NaN.
+2. Take each input as `f64` values. A `Float64` column in one chunk without nulls is
+   borrowed as it is, without a copy. Anything else is cast to `Float64` and copied chunk
+   by chunk; nulls become NaN.
 3. Find the first row where no input is NaN. Rows before it are skipped. This is what
    ta-lib-python does. TA-Lib itself does not understand NaN.
 4. Run `Function::call` on the remaining rows, with the number of skipped rows as `offset`.
-5. Put the skipped rows back in front of each output as NaN or 0.
-6. Return one series, or a struct of series.
+   The outputs come back full length, the skipped rows already NaN or 0.
+5. Return one series, or a struct of series.
 
 The expression is not elementwise. Polars therefore evaluates it once per group under
 `.over()` and once per frame otherwise.
@@ -198,5 +201,32 @@ from its regression tool, parsed from the submodule.
 
 - Windows x64 only. The `cc` build would likely work elsewhere, but nothing tests it.
 - TA-Lib is single-threaded per call. Polars runs independent expressions in parallel.
-- Each call copies its inputs into contiguous `f64` buffers. On one million rows this
-  costs about 4 ms per input series.
+- A column with nulls, in several chunks, or not `Float64` is copied once per call. A
+  dense single-chunk `Float64` column is not.
+
+### 6.1 Would rewriting the functions in Rust be faster?
+
+No. Measured once with a throwaway Rust EMA, bit-identical to `TA_EMA`, on one machine
+(24 threads, polars 1.44, TA-Lib 0.7.1, period 30, minimum of 15 runs):
+
+| rows | `ema` through TA-Lib | the same loop in Rust | `ewm_mean` (Polars, seeds differently) |
+|---|---:|---:|---:|
+| 100 000 | 0.20 ms | 0.19 ms | 0.42 ms |
+| 1 000 000 | 2.9 ms | 2.9 ms | 4.0 ms |
+| 10 000 000 | 29 ms | 30 ms | 42 ms |
+| 2 000 groups × 500 rows, `.over()` | 8.5 ms | 8.2 ms | 6.2 ms |
+
+The C loop behind the abstract interface and the Rust loop cost the same. A rewrite of the
+161 functions would gain nothing and give up the property that no function is written by
+hand.
+
+The measurement first looked different. Before `column` borrowed dense columns and
+`Function::call` wrote into the final buffer, the C path took 6.9 ms and the Rust path
+5.8 ms on one million rows, both behind `ewm_mean`. The copies around the loop, shared by
+both paths, cost more than the loop itself. Removing them halved every call; the C
+boundary was never the cost.
+
+Under `.over()` with many small groups, both paths sit about 3.5 ms above the cost of a
+plain arithmetic expression over the same groups. That is Polars' per-call plugin
+dispatch (the kwargs are deserialized on every call) plus TA-Lib's parameter holder and
+function lookup, about 1.7 µs per group in total.
