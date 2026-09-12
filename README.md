@@ -27,6 +27,50 @@ values, and multi-output functions return a struct with TA-Lib's output names. N
 leading NaN rows are handled as ta-lib-python does: the output is NaN (or 0 for integer
 outputs) until the function has enough data.
 
+## Or ta-lib-python?
+
+[ta-lib-python](https://github.com/TA-Lib/ta-lib-python) accepts a Polars `Series` and is
+the simplest tool for one array and one indicator. Inside a Polars query it needs a
+`map_batches` wrapper per indicator. The example above, written with ta-lib-python, gives
+the same four columns:
+
+```python
+import talib
+
+
+def macd(close: pl.Series) -> pl.Series:
+    m, s, h = talib.MACD(close.to_numpy(), 12, 26, 9)
+    return pl.DataFrame({"macd": m, "macdsignal": s, "macdhist": h}).to_struct("macd")
+
+
+def atr(cols: pl.Series) -> pl.Series:
+    c = cols.struct
+    return pl.Series(talib.ATR(c.field("high").to_numpy(), c.field("low").to_numpy(), c.field("close").to_numpy(), 14))
+
+
+def engulfing(cols: pl.Series) -> pl.Series:
+    c = cols.struct
+    return pl.Series(talib.CDLENGULFING(*(c.field(k).to_numpy() for k in ("open", "high", "low", "close"))))
+
+
+MACD = pl.Struct({"macd": pl.Float64, "macdsignal": pl.Float64, "macdhist": pl.Float64})
+
+df.with_columns(
+    pl.col("close").map_batches(lambda s: pl.Series(talib.SMA(s.to_numpy(), 20)), return_dtype=pl.Float64).alias("sma20"),
+    pl.col("close").map_batches(macd, return_dtype=MACD).over("symbol").alias("macd"),
+    pl.struct("high", "low", "close").map_batches(atr, return_dtype=pl.Float64).alias("atr"),
+    pl.struct("open", "high", "low", "close").map_batches(engulfing, return_dtype=pl.Int32).alias("engulfing"),
+)
+```
+
+Speed is not the difference. Measured on the same machine, one indicator on a million rows
+costs the same on both, and so do eight indicators in one `select` once ta-lib-python
+releases the GIL. Per symbol it is: under `.over("symbol")` the plugin runs the function
+per group without a Python call, and is 3 to 5 times faster with thousands of symbols.
+The difference is that every function is a native expression with TA-Lib's names,
+defaults, struct outputs, integer types, docstrings and type stubs, generated from TA-Lib's
+own metadata.
+
 ## How it works
 
 The design is described in [ARCHITECTURE.md](ARCHITECTURE.md). In short: TA-Lib
@@ -52,7 +96,7 @@ Windows x64, Python 3.10 or newer, from the wheel attached to a
 [release](https://github.com/meet-brad-ch/polars-talib/releases):
 
 ```
-pip install https://github.com/meet-brad-ch/polars-talib/releases/download/v0.2.0/polars_talib-0.2.0-cp310-abi3-win_amd64.whl
+pip install https://github.com/meet-brad-ch/polars-talib/releases/download/v0.3.0/polars_talib-0.3.0-cp310-abi3-win_amd64.whl
 ```
 
 ## Tests
